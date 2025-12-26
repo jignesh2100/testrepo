@@ -1,0 +1,467 @@
+import pandas as pd
+from difflib import SequenceMatcher
+import os
+import numpy as np
+import warnings
+import re
+
+# Suppress openpyxl warnings
+warnings.filterwarnings('ignore', category=UserWarning, module='openpyxl')
+
+# --- Utility Functions ---
+
+def similarity_score(a, b):
+    """Calculates similarity ratio between two strings (0.0 to 1.0)."""
+    if not isinstance(a, str) or not isinstance(b, str):
+        return 0.0
+
+    a_clean = str(a).lower().strip()
+    b_clean = str(b).lower().strip()
+
+    if a_clean in ["missing", "nan", ""] or b_clean in ["missing", "nan", ""]:
+        return 0.0
+
+    return SequenceMatcher(None, a_clean, b_clean).ratio()
+
+def get_match_status(score):
+    if score >= 0.95: return "Complete Match"
+    elif score >= 0.75: return "Close Match"
+    elif score > 0: return "Partial/Low Match"
+    else: return "No Match"
+
+def identify_row_type(row_series):
+    """Heuristic to identify what a row represents."""
+    vals = [str(x).strip().upper() for x in row_series if pd.notna(x) and str(x).strip() != '']
+    if not vals: return None
+
+    full_str = " ".join(vals)
+
+    # 1. Check for Tag Type
+    type_keywords = {'PI', 'INFERRED', 'MANUAL', 'CALC', 'SOFT', 'HARD', 'DCS'}
+    type_match_count = sum(1 for x in vals if x in type_keywords)
+    if type_match_count > 0 and (type_match_count / len(vals)) > 0.3:
+        return 'tag_type'
+
+    # 2. Check for Matrix/Sensor IDs
+    if "FAILURE MODES" in full_str: return 'header_structural'
+    sensor_like_count = sum(1 for x in vals if '.' in x or (any(c.isdigit() for c in x) and len(x) > 4))
+    if sensor_like_count > 0 and (sensor_like_count / len(vals)) > 0.3:
+        return 'matrix_name'
+
+    return None
+
+def parse_fmm(file_path):
+    """
+    Parses the FMM structure.
+    """
+    if not os.path.exists(file_path):
+        if os.path.exists(os.path.basename(file_path)):
+            file_path = os.path.basename(file_path)
+        else:
+            return None
+
+    print(f"Reading file: {os.path.basename(file_path)}...")
+
+    try:
+        if str(file_path).lower().endswith(('.xlsx', '.xls')):
+            df = pd.read_excel(file_path, header=None)
+        else:
+            try:
+                df = pd.read_csv(file_path, header=None, encoding='utf-8')
+            except:
+                df = pd.read_csv(file_path, header=None, encoding='latin1')
+    except Exception as e:
+        print(f"Error reading file: {e}")
+        return None
+
+    # --- 1. Smart Header Detection ---
+    row_map = {}
+    for idx, row in df.iloc[:50].iterrows():
+        row_str = row.astype(str).str.cat(sep=' ').upper()
+
+        if "FAILURE SYMPTOMS" in row_str:
+             if df.iloc[idx].astype(str).str.contains("FAILURE SYMPTOMS", case=False).any():
+                row_map['symptom_row'] = idx
+        if "TAG GENERIC NAME" in row_str or "GENERIC NAME" in row_str:
+             if df.iloc[idx].astype(str).str.contains("GENERIC NAME", case=False).any():
+                row_map['generic_name'] = idx
+
+        content_type = identify_row_type(row.iloc[2:])
+        if content_type == 'tag_type' and 'tag_type' not in row_map:
+            row_map['tag_type'] = idx
+            continue
+        if content_type == 'matrix_name' and 'matrix_name' not in row_map:
+            if 'generic_name' in row_map and row_map['generic_name'] == idx: pass
+            else: row_map['matrix_name'] = idx
+
+    # Fallbacks
+    if 'matrix_name' not in row_map:
+        for idx, row in df.iloc[:50].iterrows():
+            row_str = row.astype(str).str.cat(sep=' ').upper()
+            if "TAG MATRIX NAME" in row_str or "TAG CATEGORY" in row_str or "PI SENSORS" in row_str:
+                 if 'tag_type' in row_map and row_map['tag_type'] == idx: continue
+                 row_map['matrix_name'] = idx
+                 break
+    if 'matrix_name' not in row_map and 'generic_name' in row_map:
+        row_map['matrix_name'] = max(0, row_map['generic_name'] - 1)
+
+    print(f"  Debug: Mapped Headers -> {row_map}")
+
+    if 'matrix_name' in row_map: row_map['data_start'] = row_map['matrix_name'] + 1
+    elif 'generic_name' in row_map: row_map['data_start'] = row_map['generic_name'] + 1
+    else: row_map['data_start'] = 10
+
+    # 2. Find Prescription
+    presc_col_idx = len(df.columns) - 1
+    possible_header_rows = [v for k,v in row_map.items() if k != 'data_start']
+    possible_header_rows.extend(range(6))
+    found_presc = False
+    for r in sorted(list(set(possible_header_rows))):
+         if r >= len(df): continue
+         for c in range(len(df.columns)):
+             val = str(df.iloc[r, c]).upper()
+             if "PRESCRIPTION" in val:
+                 presc_col_idx = c
+                 found_presc = True
+                 break
+         if found_presc: break
+
+    # 3. Extract Column Metadata
+    col_meta = []
+    start_col = 2
+    s_idx = row_map.get('symptom_row')
+    g_idx = row_map.get('generic_name')
+    m_idx = row_map.get('matrix_name')
+    t_idx = row_map.get('tag_type')
+
+    if g_idx is None and m_idx is None:
+        print(f"  Error: Could not identify Tag Headers in {file_path}.")
+        return None
+
+    symptoms_row = df.iloc[s_idx] if s_idx is not None else pd.Series([""] * len(df.columns))
+    filled_symptoms = []
+    current_sym = ""
+    for val in symptoms_row:
+        s_val = str(val).strip()
+        if len(s_val) > 3 and "FAILURE" not in s_val.upper() and "MODE" not in s_val.upper():
+             current_sym = s_val
+        filled_symptoms.append(current_sym)
+
+    for c in range(start_col, presc_col_idx):
+        g_name = str(df.iloc[g_idx, c]).strip() if g_idx is not None else "Missing"
+        m_name = str(df.iloc[m_idx, c]).strip() if m_idx is not None else "Missing"
+        t_type = str(df.iloc[t_idx, c]).strip() if t_idx is not None else "NA"
+        symptom = filled_symptoms[c] if c < len(filled_symptoms) else ""
+
+        if g_name in ['nan', '', 'Missing'] and m_name in ['nan', '', 'Missing']:
+            continue
+
+        col_meta.append({
+            'col_idx': int(c),
+            'tag_type': t_type,
+            'generic_name': g_name,
+            'matrix_name': m_name,
+            'symptom': symptom
+        })
+
+    print(f"  Debug: Found {len(col_meta)} valid tag columns.")
+
+    # 4. Extract Failure Modes
+    modes_data = []
+    i = row_map['data_start']
+    while i < len(df):
+        val0 = str(df.iloc[i, 0]).strip()
+        is_index = False
+        if val0.isdigit(): is_index = True
+        else:
+            try:
+                if float(val0).is_integer(): is_index = True
+            except: pass
+
+        if is_index:
+            mode_name = str(df.iloc[i, 1]).strip()
+            prescription = df.iloc[i, presc_col_idx]
+            correlations = {}
+            for meta in col_meta:
+                val = df.iloc[i, int(meta['col_idx'])]
+                if pd.notna(val) and str(val).strip() not in ['', 'nan']:
+                    correlations[int(meta['col_idx'])] = str(val).strip()
+            weights = {}
+            if i + 1 < len(df):
+                for meta in col_meta:
+                    val = df.iloc[i+1, int(meta['col_idx'])]
+                    if pd.notna(val):
+                        try: weights[int(meta['col_idx'])] = float(val)
+                        except: pass
+
+            modes_data.append({
+                'mode_name': mode_name,
+                'correlations': correlations,
+                'weights': weights,
+                'prescription': str(prescription).strip() if pd.notna(prescription) else ""
+            })
+            i += 2
+        else:
+            i += 1
+
+    print(f"  Debug: Extracted {len(modes_data)} failure modes.")
+    return {'col_meta': col_meta, 'modes_data': modes_data}
+
+# --- IMPROVED FLATTENER: Adds Tag Type ---
+def flatten_data_for_merge(parsed_data, source_name):
+    if not parsed_data: return pd.DataFrame()
+    rows = []
+    col_meta = parsed_data['col_meta']
+    modes = parsed_data['modes_data']
+
+    for mode in modes:
+        mode_name = mode['mode_name']
+        presc = mode['prescription']
+
+        for cm in col_meta:
+            col_idx = cm['col_idx']
+            corr = mode['correlations'].get(int(col_idx), "NAN")
+            weight = mode['weights'].get(int(col_idx), "")
+
+            rows.append({
+                "Source": source_name,
+                "Failure Mode": mode_name,
+                "col_idx": col_idx,
+                "Tag Type": cm.get('tag_type', "NA"), # <--- ADDED HERE
+                "Generic Name": cm['generic_name'],
+                "Matrix Name": cm['matrix_name'],
+                "Symptom": cm['symptom'],
+                "Correlation": corr,
+                "Weight": weight,
+                "Prescription": presc
+            })
+    return pd.DataFrame(rows)
+
+# --- GREEDY MATCHER ---
+def create_unique_mapping(source_list, target_list, score_func):
+    all_scores = []
+    for s_idx, s_item in enumerate(source_list):
+        for t_idx, t_item in enumerate(target_list):
+            score = score_func(s_item, t_item)
+            if score > 0:
+                all_scores.append({'s_idx': s_idx, 't_idx': t_idx, 'score': score})
+
+    all_scores.sort(key=lambda x: x['score'], reverse=True)
+
+    final_map = {}
+    used_targets = set()
+
+    for match in all_scores:
+        s = match['s_idx']
+        t = match['t_idx']
+        if s not in final_map and t not in used_targets:
+            final_map[s] = {'target_index': t, 'score': match['score']}
+            used_targets.add(t)
+
+    for s_idx in range(len(source_list)):
+        if s_idx not in final_map:
+            final_map[s_idx] = {'target_index': None, 'score': 0.0}
+
+    return final_map
+
+# --- NEW COMPARISON LOGIC ---
+def generate_comparison(sq_data, sk_data, output_file):
+    print("--- Starting Comparison Logic (Unpivoted Strategy) ---")
+
+    if not sq_data or not sk_data:
+        print("Data missing. Aborting.")
+        return
+
+    # 1. Generate Flat Dataframes
+    print("  Flattening data...")
+    df_sq = flatten_data_for_merge(sq_data, "SQ")
+    df_sk = flatten_data_for_merge(sk_data, "SK")
+
+    # 2. Map Modes (SQ Modes -> SK Modes)
+    print("  Mapping Failure Modes...")
+    sq_modes_unique = sq_data['modes_data']
+    sk_modes_unique = sk_data['modes_data']
+
+    def mode_scorer(m1, m2): return similarity_score(m1['mode_name'], m2['mode_name'])
+
+    mode_map_indices = create_unique_mapping(sq_modes_unique, sk_modes_unique, mode_scorer)
+
+    sq_mode_to_sk_mode_info = {}
+    for sq_idx, match in mode_map_indices.items():
+        sq_name = sq_modes_unique[sq_idx]['mode_name']
+        if match['target_index'] is not None:
+            sk_name = sk_modes_unique[match['target_index']]['mode_name']
+            sk_presc = sk_modes_unique[match['target_index']]['prescription']
+            sq_mode_to_sk_mode_info[sq_name] = {
+                'sk_mode_name': sk_name,
+                'sk_presc': sk_presc,
+                'mode_score': match['score']
+            }
+        else:
+            sq_mode_to_sk_mode_info[sq_name] = {'sk_mode_name': None, 'sk_presc': "", 'mode_score': 0}
+
+    # 3. Map Columns/Tags (SQ Col Idx -> SK Col Idx)
+    print("  Mapping Columns/Tags...")
+    sq_cols = sq_data['col_meta']
+    sk_cols = sk_data['col_meta']
+
+    def col_scorer(c1, c2):
+        s_gen = similarity_score(c1['generic_name'], c2['generic_name'])
+        s_mat = similarity_score(c1['matrix_name'], c2['matrix_name'])
+        s_sym = similarity_score(c1['symptom'], c2['symptom'])
+        return (s_gen * 0.5) + (s_mat * 0.3) + (s_sym * 0.2)
+
+    col_map_indices = create_unique_mapping(sq_cols, sk_cols, col_scorer)
+
+    sq_col_to_sk_col_info = {}
+    for sq_c_idx, match in col_map_indices.items():
+        actual_sq_col_idx = sq_cols[sq_c_idx]['col_idx']
+
+        if match['target_index'] is not None:
+            target_c = sk_cols[match['target_index']]
+            sq_col_to_sk_col_info[actual_sq_col_idx] = {
+                'sk_col_idx': target_c['col_idx'],
+                'sk_gen': target_c['generic_name'],
+                'sk_mat': target_c['matrix_name'],
+                'sk_sym': target_c['symptom'],
+                'sk_type': target_c.get('tag_type', 'NA'), # Get SK Tag Type
+                'tag_score': match['score']
+            }
+        else:
+             sq_col_to_sk_col_info[actual_sq_col_idx] = {
+                'sk_col_idx': -999,
+                'sk_gen': "No Match", 'sk_mat': "-", 'sk_sym': "-", 'sk_type': "NA",
+                'tag_score': 0
+             }
+
+    # 4. Prepare SQ Dataframe for Merge
+    print("  Preparing Merge...")
+
+    def get_sk_mode(row):
+        res = sq_mode_to_sk_mode_info.get(row['Failure Mode'], {})
+        return pd.Series([res.get('sk_mode_name'), res.get('mode_score'), res.get('sk_presc')])
+
+    def get_sk_col(row):
+        res = sq_col_to_sk_col_info.get(row['col_idx'], {})
+        # Added sk_type here
+        return pd.Series([
+            res.get('sk_col_idx'), res.get('tag_score'),
+            res.get('sk_gen'), res.get('sk_mat'), res.get('sk_sym'), res.get('sk_type')
+        ])
+
+    df_sq[['Target_SK_Mode', 'Mode_Score', 'Target_SK_Presc']] = df_sq.apply(get_sk_mode, axis=1)
+    # Added Target_SK_Type to unpacking
+    df_sq[['Target_SK_Col_Idx', 'Tag_Score', 'Target_SK_Gen', 'Target_SK_Mat', 'Target_SK_Sym', 'Target_SK_Type']] = df_sq.apply(get_sk_col, axis=1)
+
+    # 5. Perform the Merge
+    merged = pd.merge(
+        df_sq,
+        df_sk,
+        how='left',
+        left_on=['Target_SK_Mode', 'Target_SK_Col_Idx'],
+        right_on=['Failure Mode', 'col_idx'],
+        suffixes=('_SQ', '_SK')
+    )
+
+    # 6. Clean and Calculate Differences
+    print("  Finalizing Table...")
+    final_rows = []
+
+    for _, row in merged.iterrows():
+        sq_corr = row['Correlation_SQ']
+        sk_corr = row['Correlation_SK']
+        sq_w = row['Weight_SQ']
+        sk_w = row['Weight_SK']
+
+        has_sq = str(sq_corr).upper() not in ["NAN", "", "NONE"] and pd.notna(sq_corr)
+        has_sk = str(sk_corr).upper() not in ["NAN", "", "NONE"] and pd.notna(sk_corr)
+        has_w = (sq_w != "") or (pd.notna(sk_w) and sk_w != "")
+
+        if not (has_sq or has_sk or has_w):
+            continue
+
+        try: w1 = float(sq_w) if sq_w != "" else 0.0
+        except: w1 = 0.0
+        try: w2 = float(sk_w) if pd.notna(sk_w) and sk_w != "" else 0.0
+        except: w2 = 0.0
+
+        rx_score = similarity_score(row['Prescription_SQ'], row['Target_SK_Presc'])
+        sq_sym = row['Symptom_SQ']
+        sk_sym = row['Symptom_SK']
+        if pd.isna(sk_sym):
+            sk_sym = row['Target_SK_Sym']
+        sym_score = similarity_score(sq_sym, sk_sym)
+
+        final_rows.append({
+            'SQ Failure Mode': row['Failure Mode_SQ'],
+            'SK Failure Mode': row['Target_SK_Mode'],
+            'Mode Match Status': get_match_status(row['Mode_Score']),
+            'Mode Score': round(row['Mode_Score'], 2),
+
+            'SQ Prescription': row['Prescription_SQ'],
+            'SK Prescription': row['Target_SK_Presc'],
+            'Rx Match Status': get_match_status(rx_score),
+
+            'SQ Symptom': sq_sym,
+            'SK Symptom': sk_sym,
+            'Symptom Match Status': get_match_status(sym_score),
+
+            'SQ Tag Type': row.get('Tag Type_SQ', 'NA'), # <--- ADDED SQ TYPE
+            'SK Tag Type': row.get('Target_SK_Type', 'NA'), # <--- ADDED SK TYPE
+
+            'SQ Tag Generic': row['Generic Name_SQ'],
+            'SK Tag Generic': row['Target_SK_Gen'],
+            'Tag Match Status': get_match_status(row['Tag_Score']),
+            'Tag Score': round(row['Tag_Score'], 2),
+
+            'SQ Tag Matrix': row['Matrix Name_SQ'],
+            'SK Tag Matrix': row['Target_SK_Mat'],
+
+            'SQ Correlation': sq_corr,
+            'SK Correlation': sk_corr,
+            'Corr Match': "Yes" if str(sq_corr).strip().upper() == str(sk_corr).strip().upper() else "No",
+
+            'SQ Weight': sq_w,
+            'SK Weight': sk_w,
+            'Weight Diff': w1 - w2
+        })
+
+    df_final = pd.DataFrame(final_rows)
+    df_final.to_csv(output_file, index=False)
+    print(f"Success! Generated Unpivoted Comparison: '{output_file}' with {len(df_final)} rows.")
+
+# --- Main Execution Block ---
+
+def main():
+    # Update these paths to match your actual file locations
+    SQ_FILE = '/content/SQ_CGC_Turbine_FMM_v0 (1) 2.xlsx'
+    SK_FILE = '/content/Kayan - CGCT1 - FMM-v0.1_rev10.xlsx'
+
+    OUTPUT_FILE_UNPIVOTED = 'Unpivoted_FMM_Data.csv'
+    OUTPUT_FILE_ANALYSIS = 'FMM_Unified_Analysis.csv'
+
+    print("--- Parsing Files ---")
+    sq_data = parse_fmm(SQ_FILE)
+    sk_data = parse_fmm(SK_FILE)
+
+    if not sq_data or not sk_data:
+        print("Error parsing files. Exiting.")
+        return
+
+    print("--- Generating Unpivoted Data for Merge ---")
+    df_sq_flat = flatten_data_for_merge(sq_data, "SQ_CGC")
+    df_sk_flat = flatten_data_for_merge(sk_data, "KT-13001")
+
+    # Filter for cleaner output
+    df_sq_clean = df_sq_flat[df_sq_flat['Correlation'] != "NAN"]
+    df_sk_clean = df_sk_flat[df_sk_flat['Correlation'] != "NAN"]
+
+    df_unpivoted = pd.concat([df_sq_clean, df_sk_clean], ignore_index=True)
+    df_unpivoted.to_csv(OUTPUT_FILE_UNPIVOTED, index=False)
+    print(f"Success! Generated Unpivoted Data: '{OUTPUT_FILE_UNPIVOTED}'")
+
+    # Run the new Comparison Logic
+    generate_comparison(sq_data, sk_data, OUTPUT_FILE_ANALYSIS)
+
+if __name__ == "__main__":
+    main()
