@@ -1,14 +1,34 @@
-sheet_name = "FMM_Turbine_UTD"
+import xlwings as xw
 
-# Check if sheet already exists
-sheet_exists = any(sh.name == sheet_name for sh in wb.sheets)
-
-if not sheet_exists:
-    src = wb.sheets["FMM_Turbine_Template"]
-    new_sheet = src.copy(after=wb.sheets[-1])
-    new_sheet.name = sheet_name
-    print(f"{sheet_name} created")
-else:
-    print(f"{sheet_name} already exists, skipping creation")
-
-wb.save()
+def check_generic_name(ws):
+    """
+    Check row 6 cell-by-cell.
+    If cell contains 'Efficiency', mark it red.
+    """
+    
+    row = 6
+    
+    # Get last used column in row 6
+    last_col = ws.range((row, ws.cells.last_cell.column)).end('left').column
+    
+    for col in range(1, last_col + 1):
+        cell = ws.range((row, col))
+        value = cell.value
+        
+        if isinstance(value, str):  # ensure it's text
+            
+            # 🔴 Condition 1
+            if "Efficiency" in value:
+                cell.color = (255, 0, 0)
+                
+                # Optional: add comment
+                try:
+                    cell.api.Comment.Delete()
+                except:
+                    pass
+                
+                cell.api.AddComment("Contains 'Efficiency' - review needed")
+        
+        # 👉 You can add more conditions here later
+        # elif "Pressure" in value:
+        #     cell.color = (255, 255, 0)
