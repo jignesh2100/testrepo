@@ -1,25 +1,25 @@
 import pandas as pd
 
-def expand_stages(df, col_name, number_of_stages):
+def expand_stages(df, number_of_stages):
     expanded_rows = []
 
     for _, row in df.iterrows():
-        tag = row[col_name]
+        tag = row.get("Tag_name")
+        formula = row.get("PI_formula")
         
         if isinstance(tag, str) and "stage_A" in tag:
-            # replicate for each stage
             for i in range(1, number_of_stages + 1):
                 new_row = row.copy()
-                new_row[col_name] = tag.replace("stage_A", f"stage_{i}")
+                
+                # Replace in Tag_name
+                new_row["Tag_name"] = tag.replace("stage_A", f"stage_{i}")
+                
+                # Replace in PI_formula (if exists and not null)
+                if isinstance(formula, str):
+                    new_row["PI_formula"] = formula.replace("stage_A", f"stage_{i}")
+                
                 expanded_rows.append(new_row)
         else:
-            # keep as is (only once)
             expanded_rows.append(row)
 
     return pd.DataFrame(expanded_rows).reset_index(drop=True)
-
-number_of_stages = 3
-
-df_new = expand_stages(df, "Tag_name", number_of_stages)
-
-print(df_new)
