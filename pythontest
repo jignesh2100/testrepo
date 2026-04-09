@@ -2,15 +2,19 @@ import xlwings as xw
 import re
 
 def replace_stage_text(ws, present_stage):
-    # Read full used range
+    # 🔴 CHANGE 1: ensure present_stage is int
+    present_stage = int(present_stage)
+
     rng = ws.used_range
     data = rng.value
 
     def transform(text):
-        if not isinstance(text, str):
+        # 🔴 CHANGE 2: convert any value to string safely
+        if text is None:
             return text
         
-        # Pattern: Stage A, Stage A+1, Stage A-1
+        text = str(text)
+
         pattern = r"Stage A([+-]\d+)?"
         
         def repl(match):
@@ -21,15 +25,19 @@ def replace_stage_text(ws, present_stage):
             else:
                 stage_num = present_stage
             
-            return f"Stage {stage_num}"
-        
+            # 🔴 CHANGE 3: ensure stage_num is converted to string
+            return "Stage " + str(stage_num)
+            # OR: return f"Stage {stage_num}"  (both fine)
+
         return re.sub(pattern, repl, text)
 
-    # Apply transformation
+    # 🔴 CHANGE 4: handle case when data is single cell (not 2D list)
+    if not isinstance(data, list):
+        data = [[data]]
+
     new_data = [
         [transform(cell) for cell in row]
         for row in data
     ]
 
-    # Write back
     rng.value = new_data
