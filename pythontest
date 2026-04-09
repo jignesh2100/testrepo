@@ -1,34 +1,25 @@
-import xlwings as xw
+import pandas as pd
 
-def check_generic_name(ws):
-    """
-    Check row 6 cell-by-cell.
-    If cell contains 'Efficiency', mark it red.
-    """
-    
-    row = 6
-    
-    # Get last used column in row 6
-    last_col = ws.range((row, ws.cells.last_cell.column)).end('left').column
-    
-    for col in range(1, last_col + 1):
-        cell = ws.range((row, col))
-        value = cell.value
+def expand_stages(df, col_name, number_of_stages):
+    expanded_rows = []
+
+    for _, row in df.iterrows():
+        tag = row[col_name]
         
-        if isinstance(value, str):  # ensure it's text
-            
-            # 🔴 Condition 1
-            if "Efficiency" in value:
-                cell.color = (255, 0, 0)
-                
-                # Optional: add comment
-                try:
-                    cell.api.Comment.Delete()
-                except:
-                    pass
-                
-                cell.api.AddComment("Contains 'Efficiency' - review needed")
-        
-        # 👉 You can add more conditions here later
-        # elif "Pressure" in value:
-        #     cell.color = (255, 255, 0)
+        if isinstance(tag, str) and "stage_A" in tag:
+            # replicate for each stage
+            for i in range(1, number_of_stages + 1):
+                new_row = row.copy()
+                new_row[col_name] = tag.replace("stage_A", f"stage_{i}")
+                expanded_rows.append(new_row)
+        else:
+            # keep as is (only once)
+            expanded_rows.append(row)
+
+    return pd.DataFrame(expanded_rows).reset_index(drop=True)
+
+number_of_stages = 3
+
+df_new = expand_stages(df, "Tag_name", number_of_stages)
+
+print(df_new)
