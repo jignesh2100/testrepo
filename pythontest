@@ -1,25 +1,35 @@
-import pandas as pd
+import xlwings as xw
+import re
 
-def expand_stages(df, number_of_stages):
-    expanded_rows = []
+def replace_stage_text(ws, present_stage):
+    # Read full used range
+    rng = ws.used_range
+    data = rng.value
 
-    for _, row in df.iterrows():
-        tag = row.get("Tag_name")
-        formula = row.get("PI_formula")
+    def transform(text):
+        if not isinstance(text, str):
+            return text
         
-        if isinstance(tag, str) and "stage_A" in tag:
-            for i in range(1, number_of_stages + 1):
-                new_row = row.copy()
-                
-                # Replace in Tag_name
-                new_row["Tag_name"] = tag.replace("stage_A", f"stage_{i}")
-                
-                # Replace in PI_formula (if exists and not null)
-                if isinstance(formula, str):
-                    new_row["PI_formula"] = formula.replace("stage_A", f"stage_{i}")
-                
-                expanded_rows.append(new_row)
-        else:
-            expanded_rows.append(row)
+        # Pattern: Stage A, Stage A+1, Stage A-1
+        pattern = r"Stage A([+-]\d+)?"
+        
+        def repl(match):
+            offset = match.group(1)
+            
+            if offset:
+                stage_num = present_stage + int(offset)
+            else:
+                stage_num = present_stage
+            
+            return f"Stage {stage_num}"
+        
+        return re.sub(pattern, repl, text)
 
-    return pd.DataFrame(expanded_rows).reset_index(drop=True)
+    # Apply transformation
+    new_data = [
+        [transform(cell) for cell in row]
+        for row in data
+    ]
+
+    # Write back
+    rng.value = new_data
