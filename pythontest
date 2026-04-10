@@ -1,43 +1,83 @@
 import xlwings as xw
-import re
 
-def replace_stage_text(ws, present_stage):
-    # 🔴 CHANGE 1: ensure present_stage is int
-    present_stage = int(present_stage)
-
+def format_fmm_sheet(ws):
     rng = ws.used_range
-    data = rng.value
 
-    def transform(text):
-        # 🔴 CHANGE 2: convert any value to string safely
-        if text is None:
-            return text
-        
-        text = str(text)
+    # -------------------------------
+    # 1. REMOVE ALL BORDERS
+    # -------------------------------
+    borders = rng.api.Borders
+    for i in range(7, 13):
+        borders(i).LineStyle = -4142  # xlNone
 
-        pattern = r"Stage A([+-]\d+)?"
-        
-        def repl(match):
-            offset = match.group(1)
-            
-            if offset:
-                stage_num = present_stage + int(offset)
-            else:
-                stage_num = present_stage
-            
-            # 🔴 CHANGE 3: ensure stage_num is converted to string
-            return "Stage " + str(stage_num)
-            # OR: return f"Stage {stage_num}"  (both fine)
+    # -------------------------------
+    # 2. FIND LAST FILLED ROW (based on Column B)
+    # -------------------------------
+    last_row = ws.range("B" + str(ws.cells.last_cell.row)).end("up").row
 
-        return re.sub(pattern, repl, text)
+    # Add +1 for blank row after each FMM
+    last_row = last_row + 1
 
-    # 🔴 CHANGE 4: handle case when data is single cell (not 2D list)
-    if not isinstance(data, list):
-        data = [[data]]
+    # -------------------------------
+    # 3. FIND LAST FILLED COLUMN (Row 2 - symptoms row)
+    # -------------------------------
+    last_col = ws.range((2, ws.cells.last_cell.column)).end("left").column
 
-    new_data = [
-        [transform(cell) for cell in row]
-        for row in data
-    ]
+    # -------------------------------
+    # 4. APPLY BORDER TO MERGED CELLS (Row 2, C onward)
+    # -------------------------------
+    col = 3  # Column C
+    while col <= last_col:
+        cell = ws.cells(2, col)
 
-    rng.value = new_data
+        if cell.api.MergeCells:
+            merge_area = cell.api.MergeArea
+            apply_dark_border(merge_area)
+
+            # skip merged width
+            col = merge_area.Columns.Count + merge_area.Column
+        else:
+            apply_dark_border(cell.api)
+            col += 1
+
+    # -------------------------------
+    # 5. OUTER BORDER FOR FULL DATA
+    # -------------------------------
+    full_rng = ws.range((2, 2), (last_row, last_col))  # B2 to last
+    apply_outer_border(full_rng.api)
+
+    # -------------------------------
+    # 6. COLUMN B STRONG BORDER
+    # -------------------------------
+    colB_rng = ws.range((2, 2), (last_row, 2))
+    apply_dark_border(colB_rng.api)
+
+
+# -------------------------------
+# Helper: Apply dark border (all sides)
+# -------------------------------
+def apply_dark_border(rng_api):
+    for i in [7, 8, 9, 10]:  # left, top, bottom, right
+        rng_api.Borders(i).LineStyle = 1  # xlContinuous
+        rng_api.Borders(i).Weight = 3     # thick
+
+
+# -------------------------------
+# Helper: Outer border only
+# -------------------------------
+def apply_outer_border(rng_api):
+    # left
+    rng_api.Borders(7).LineStyle = 1
+    rng_api.Borders(7).Weight = 3
+
+    # top
+    rng_api.Borders(8).LineStyle = 1
+    rng_api.Borders(8).Weight = 3
+
+    # bottom
+    rng_api.Borders(9).LineStyle = 1
+    rng_api.Borders(9).Weight = 3
+
+    # right
+    rng_api.Borders(10).LineStyle = 1
+    rng_api.Borders(10).Weight = 3
