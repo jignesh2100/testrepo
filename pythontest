@@ -7,6 +7,7 @@ def format_fmm_sheet(ws):
     2. Apply vertical block borders based on merged headers (Row 2)
     3. Apply outer border to full data
     4. Apply strong border to Column B
+    5. Apply separate outer borders for rows 3, 4, 5 (B → last_col)
     """
 
     rng = ws.used_range
@@ -22,9 +23,7 @@ def format_fmm_sheet(ws):
     # 2. FIND LAST ROW (based on Column B)
     # -------------------------------
     last_row = ws.range("B" + str(ws.cells.last_cell.row)).end("up").row
-
-    # include one extra blank row after FMM
-    last_row += 1
+    last_row += 1  # include blank row after each FMM
 
     # -------------------------------
     # 3. FIND LAST COLUMN (Row 2)
@@ -45,23 +44,18 @@ def format_fmm_sheet(ws):
             start_col = merge_area.Column
             end_col = start_col + merge_area.Columns.Count - 1
 
-            # full vertical block
+            # Full vertical block
             block_rng = ws.range((2, start_col), (last_row, end_col))
-
             apply_outer_border(block_rng.api)
 
             col = end_col + 1  # skip merged columns
-
         else:
-            # single column case
             block_rng = ws.range((2, col), (last_row, col))
-
             apply_outer_border(block_rng.api)
-
             col += 1
 
     # -------------------------------
-    # 5. APPLY OUTER BORDER FOR FULL TABLE (B2 → last)
+    # 5. APPLY OUTER BORDER FOR FULL TABLE
     # -------------------------------
     full_rng = ws.range((2, 2), (last_row, last_col))
     apply_outer_border(full_rng.api)
@@ -71,6 +65,13 @@ def format_fmm_sheet(ws):
     # -------------------------------
     colB_rng = ws.range((2, 2), (last_row, 2))
     apply_dark_border(colB_rng.api)
+
+    # -------------------------------
+    # 7. ROW 3, 4, 5 SEPARATE OUTER BORDERS
+    # -------------------------------
+    for r in [3, 4, 5]:
+        row_rng = ws.range((r, 2), (r, last_col))  # Column B → last_col
+        apply_outer_border(row_rng.api)
 
 
 # -------------------------------
