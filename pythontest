@@ -1,104 +1,26 @@
-import xlwings as xw
+import pandas as pd
 
-def format_fmm_sheet(ws):
-    """
-    Format FMM sheet:
-    1. Remove all borders
-    2. Apply vertical block borders based on merged headers (Row 2)
-    3. Apply outer border to full data
-    4. Apply strong border to Column B
-    5. Apply separate outer borders for rows 3, 4, 5 (B → last_col)
-    """
+def fmm_to_dataframe(ws):
+    # Find last column (based on row 3)
+    last_col = ws.range((3, ws.cells.last_cell.column)).end("left").column
 
-    rng = ws.used_range
+    data = []
 
-    # -------------------------------
-    # 1. REMOVE ALL BORDERS
-    # -------------------------------
-    borders = rng.api.Borders
-    for i in range(7, 13):
-        borders(i).LineStyle = -4142  # xlNone
+    for col in range(3, last_col + 1):  # start from column C
+        tag_type = ws.cells(3, col).value
+        pi_sensor = ws.cells(4, col).value
+        tag_name = ws.cells(5, col).value
 
-    # -------------------------------
-    # 2. FIND LAST ROW (based on Column B)
-    # -------------------------------
-    last_row = ws.range("B" + str(ws.cells.last_cell.row)).end("up").row
-    last_row += 1  # include blank row after each FMM
+        # Skip empty columns
+        if not tag_name:
+            continue
 
-    # -------------------------------
-    # 3. FIND LAST COLUMN (Row 2)
-    # -------------------------------
-    last_col = ws.range((2, ws.cells.last_cell.column)).end("left").column
+        data.append({
+            "Tag Type": tag_type,
+            "PI Sensor": pi_sensor,
+            "Tag Generic Name": tag_name
+        })
 
-    # -------------------------------
-    # 4. APPLY BORDERS BASED ON MERGED HEADERS (Row 2 → last_row)
-    # -------------------------------
-    col = 3  # start from column C
+    df = pd.DataFrame(data)
 
-    while col <= last_col:
-        cell = ws.cells(2, col)
-
-        if cell.api.MergeCells:
-            merge_area = cell.api.MergeArea
-
-            start_col = merge_area.Column
-            end_col = start_col + merge_area.Columns.Count - 1
-
-            # Full vertical block
-            block_rng = ws.range((2, start_col), (last_row, end_col))
-            apply_outer_border(block_rng.api)
-
-            col = end_col + 1  # skip merged columns
-        else:
-            block_rng = ws.range((2, col), (last_row, col))
-            apply_outer_border(block_rng.api)
-            col += 1
-
-    # -------------------------------
-    # 5. APPLY OUTER BORDER FOR FULL TABLE
-    # -------------------------------
-    full_rng = ws.range((2, 2), (last_row, last_col))
-    apply_outer_border(full_rng.api)
-
-    # -------------------------------
-    # 6. COLUMN B STRONG BORDER
-    # -------------------------------
-    colB_rng = ws.range((2, 2), (last_row, 2))
-    apply_dark_border(colB_rng.api)
-
-    # -------------------------------
-    # 7. ROW 3, 4, 5 SEPARATE OUTER BORDERS
-    # -------------------------------
-    for r in [3, 4, 5]:
-        row_rng = ws.range((r, 2), (r, last_col))  # Column B → last_col
-        apply_outer_border(row_rng.api)
-
-
-# -------------------------------
-# Helper: Dark border (all sides)
-# -------------------------------
-def apply_dark_border(rng_api):
-    for i in [7, 8, 9, 10]:  # left, top, bottom, right
-        rng_api.Borders(i).LineStyle = 1  # xlContinuous
-        rng_api.Borders(i).Weight = 3     # thick
-
-
-# -------------------------------
-# Helper: Outer border only
-# -------------------------------
-def apply_outer_border(rng_api):
-    # Left
-    rng_api.Borders(7).LineStyle = 1
-    rng_api.Borders(7).Weight = 3
-
-    # Top
-    rng_api.Borders(8).LineStyle = 1
-    rng_api.Borders(8).Weight = 3
-
-    # Bottom
-    rng_api.Borders(9).LineStyle = 1
-    rng_api.Borders(9).Weight = 3
-
-    # Right
-    rng_api.Borders(10).LineStyle = 1
-    rng_api.Borders(10).Weight = 3
+    return df
