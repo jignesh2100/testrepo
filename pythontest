@@ -1,12 +1,39 @@
-import re
 
-def extract_unique_tags(df, col_name="PI Sensors"):
-    pattern = r'UN\.ETH\.[A-Za-z0-9]+\.[A-Za-z0-9]+'
-    
-    all_tags = set()
+import ipywidgets as widgets
+from IPython.display import display
 
-    for text in df[col_name].dropna():
-        matches = re.findall(pattern, str(text))
-        all_tags.update(matches)
+button = widgets.Button(description="OK", button_style='success')
+output = widgets.Output()
 
-    return list(all_tags)
+def on_click(b):
+    with output:
+        print("User clicked OK")
+
+button.on_click(on_click)
+
+display(widgets.VBox([
+    widgets.HTML("<b>Process completed successfully!</b>"),
+    button,
+    output
+]))
+
+
+
+
+
+yes_btn = widgets.Button(description="Yes", button_style='success')
+no_btn = widgets.Button(description="No", button_style='danger')
+
+def yes_clicked(b):
+    print("Yes selected")
+
+def no_clicked(b):
+    print("No selected")
+
+yes_btn.on_click(yes_clicked)
+no_btn.on_click(no_clicked)
+
+display(widgets.VBox([
+    widgets.HTML("<b>Proceed with operation?</b>"),
+    widgets.HBox([yes_btn, no_btn])
+]))
