@@ -1,26 +1,12 @@
-import pandas as pd
+import re
 
-def fmm_to_dataframe(ws):
-    # Find last column (based on row 3)
-    last_col = ws.range((3, ws.cells.last_cell.column)).end("left").column
+def extract_unique_tags(df, col_name="PI Sensors"):
+    pattern = r'UN\.ETH\.[A-Za-z0-9]+\.[A-Za-z0-9]+'
+    
+    all_tags = set()
 
-    data = []
+    for text in df[col_name].dropna():
+        matches = re.findall(pattern, str(text))
+        all_tags.update(matches)
 
-    for col in range(3, last_col + 1):  # start from column C
-        tag_type = ws.cells(3, col).value
-        pi_sensor = ws.cells(4, col).value
-        tag_name = ws.cells(5, col).value
-
-        # Skip empty columns
-        if not tag_name:
-            continue
-
-        data.append({
-            "Tag Type": tag_type,
-            "PI Sensor": pi_sensor,
-            "Tag Generic Name": tag_name
-        })
-
-    df = pd.DataFrame(data)
-
-    return df
+    return list(all_tags)
