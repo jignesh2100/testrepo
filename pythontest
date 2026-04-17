@@ -1,15 +1,12 @@
-import plotly.express as px
-from ipywidgets import interact, SelectMultiple, Dropdown
+from sklearn.feature_selection import mutual_info_regression
 
-def plot_chart(x_col, y_cols):
-    if len(y_cols) == 0:
-        return
-    
-    fig = px.line(df, x=x_col, y=list(y_cols))
-    fig.show()
+mi = mutual_info_regression(df[X1], df[Y1])
 
-interact(
-    plot_chart,
-    x_col=Dropdown(options=df.columns, description='X-axis'),
-    y_cols=SelectMultiple(options=df.columns, description='Y-axis')
-)
+mi_series = pd.Series(mi, index=X1).sort_values(ascending=False)
+
+print(mi_series)
+import matplotlib.pyplot as plt
+
+importance.plot(kind='bar')
+plt.title("Feature Importance (Impact on Y1)")
+plt.show()
