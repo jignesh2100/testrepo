@@ -1,39 +1,118 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import pandas as pd
+from sklearn.linear_model import LinearRegression
+from sklearn.preprocessing import PolynomialFeatures
+import sys
+import re
 
-import ipywidgets as widgets
-from IPython.display import display
+df = pd.read_csv("D:\\data.csv")
 
-button = widgets.Button(description="OK", button_style='success')
-output = widgets.Output()
+for variablie in df.columns :
+    print(variablie)
 
-def on_click(b):
-    with output:
-        print("User clicked OK")
+df.columns = df.columns.str.strip()
 
-button.on_click(on_click)
+compolist = list(df.columns)[28:]
+print(len(compolist))
+compolist = compolist[:-67]
+print(len(compolist))
 
-display(widgets.VBox([
-    widgets.HTML("<b>Process completed successfully!</b>"),
-    button,
-    output
-]))
+print(compolist)
+min_max_df = pd.DataFrame({
+    'Column': compolist,
+    'Min_Value': df[compolist].min(),
+    'Max_Value': df[compolist].max()
+})
+
+print(min_max_df)
+min_max_df.to_csv('min_max_df.csv')
 
 
+min_max_df = df[compolist].agg(['min','max']).T
+min_max_df.reset_index(inplace=True)
+min_max_df.columns = ['Column','Min_Value','Max_Value']
+
+# Keep only columns where max > 0
+compolist = min_max_df[min_max_df['Max_Value'] > 0]['Column'].tolist()
+
+print(len(compolist))
+print(compolist)
+#df.columns = df.columns.str.rstrip()
+
+Y = compolist # ['Ethylene_yield']
+df.drop(columns=['COP'], inplace=True, errors='ignore')
 
 
+X =   ['CIT', 'C','COT',]
+df.rename(columns=dict(zip(X, ['CIT','SHC'])), inplace=True)
+X =   ['CIT','COP']
+avg_values = df[X].mean()
+print(X)
+print(avg_values)
 
-yes_btn = widgets.Button(description="Yes", button_style='success')
-no_btn = widgets.Button(description="No", button_style='danger')
+df.columns = df.columns.str.rstrip()
+counter = 1
+for yname in Y:
 
-def yes_clicked(b):
-    print("Yes selected")
+    X_values  = df[X].values
+    #print("\n")
+    #print(yname)
+    print("\n", counter, ":",yname)
+    y = df['{}'.format(yname)].values
+    print("Y sample ",y)
+    poly = PolynomialFeatures(degree=2)
+    X_poly = poly.fit_transform(X_values)
+    model = LinearRegression()
+    model.fit(X_poly, y)
 
-def no_clicked(b):
-    print("No selected")
+    y_pred = model.predict(X_poly)
+    df['{}_estimated'.format(yname)] = y_pred
 
-yes_btn.on_click(yes_clicked)
-no_btn.on_click(no_clicked)
 
-display(widgets.VBox([
-    widgets.HTML("<b>Proceed with operation?</b>"),
-    widgets.HBox([yes_btn, no_btn])
-]))
+    # Displaying the polynomial equation
+    coefficients = model.coef_
+    intercept = model.intercept_
+
+    #print("coefficients",coefficients)
+    #print("intercept",intercept)
+    #print("len coefficients",len(coefficients))
+
+    feature_names = X 
+    feature_names = poly.get_feature_names_out(input_features=X)
+
+    # Display the polynomial equation
+    #print("\nPolynomial Equation:")
+
+#    equation = f"y = {intercept}"
+    # for coef, name in zip(coefficients, feature_names):
+    #     equation += f" + ({coef:.6f}) * {name}"
+    equation = f" = {intercept:.6f}"  # Start with the intercept
+    for coef, name in zip(coefficients, feature_names):
+        if coef != 0:  # Skip terms with zero coefficients
+            equation += f" + ({coef:.30f}) * {name}"
+
+    #equation = equation.replace('^', '**')
+    #equation = equation.replace('²', '**')
+    equation = re.sub(r'([a-zA-Z0-9_)])\s+([a-zA-Z0-9_(])', r'\1*\2', equation)
+    print("{} ".format(yname),equation)
+
+    plt.scatter(y[::15],y[::15])
+    plt.scatter(y[::15],y_pred[::15])
+
+
+    actual = df['{}'.format(yname)]
+    predicted = df['{}_estimated'.format(yname)]
+
+    ss_total = np.sum((actual - np.mean(actual)) ** 2)
+    ss_residual = np.sum((actual - predicted) ** 2)
+    r2 = 1 - (ss_residual / ss_total)
+    print("R2 = ",r2)
+
+
+    # plt.xlabel('Actual {}'.format(yname))
+    # plt.ylabel('Estimated {}'.format(yname))
+    # plt.title("R2 {}".format(r2))
+    # plt.show()
+
+    counter += 1
