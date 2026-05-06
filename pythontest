@@ -1,12 +1,30 @@
-from sklearn.feature_selection import mutual_info_regression
+import xlwings as xw
 
-mi = mutual_info_regression(df[X1], df[Y1])
-
-mi_series = pd.Series(mi, index=X1).sort_values(ascending=False)
-
-print(mi_series)
-import matplotlib.pyplot as plt
-
-importance.plot(kind='bar')
-plt.title("Feature Importance (Impact on Y1)")
-plt.show()
+def fill_row4_from_dict(sheet, pi_dict, inferred_dict, start_col=4):
+    ws = sheet
+    
+    # Find last used column in row 5
+    last_col = ws.range((5, ws.cells.last_cell.column)).end('left').column
+    
+    for col in range(start_col, last_col + 1):
+        
+        # Read values
+        source_type = ws.range((3, col)).value
+        raw_key = ws.range((5, col)).value
+        
+        if raw_key is None:
+            continue
+        
+        # Transform key (DO NOT modify sheet)
+        key = str(raw_key).strip().replace(" ", "_")
+        
+        # Select dictionary
+        if str(source_type).strip().upper() == "PI":
+            value = pi_dict.get(key, None)
+        elif str(source_type).strip().upper() == "INFERRED":
+            value = inferred_dict.get(key, None)
+        else:
+            value = None
+        
+        # Write to row 4
+        ws.range((4, col)).value = value
